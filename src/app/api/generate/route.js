@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 const openRouterUrl = 'https://openrouter.ai/api/v1/chat/completions';
 const modelsToTry = [
+  'meta-llama/llama-4-maverick',
   'deepseek/deepseek-chat',
   'google/gemini-2.0-pro-exp',
   'meta-llama/llama-3.3-70b-instruct:free',
@@ -19,7 +20,7 @@ async function callAI(messages, apiKey, temperature = 0.7, expectJson = false) {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
           'HTTP-Referer': 'http://localhost:3000',
-          'X-Title': 'SEO Content Writer Pro',
+          'X-Title': 'SEO Content Writer Pro - Llama-4',
         },
         body: JSON.stringify({
           model: model,
@@ -55,20 +56,12 @@ async function callAI(messages, apiKey, temperature = 0.7, expectJson = false) {
 
       return content;
     } catch (e) {
-      console.warn(`Error calling model ${model} (expectJson: ${expectJson}):`, e);
+      console.warn(`Error calling model ${model}:`, e);
       lastErrorMsg = e.message;
     }
   }
   
-  if (expectJson) {
-    // Return a default bad score so loop continues safely without crashing
-    return {
-      score: 0,
-      details: { criteria: {} },
-      suggestions: ["Lỗi khi chấm điểm hệ thống. Nội dung có thể không tối ưu."]
-    };
-  }
-
+  if (expectJson) return { score: 0, suggestions: [] };
   throw new Error(`OpenRouter API error (All fallback models failed). Lỗi gần nhất: ${lastErrorMsg}`);
 }
 
@@ -83,131 +76,99 @@ export async function POST(req) {
 
     const internalLinkStr = internalLinks && internalLinks.trim() ? internalLinks : 'Không có';
 
-    // BƯỚC 1: VIẾT BÀI
-    const writePrompt = `Bạn là chuyên gia SEO & content chiến lược, đang viết bài blog cho blog.hacklike16.com. Tuân thủ nghiêm ngặt các nguyên tắc sau:
+    // ----------------------------------------------------
+    // GIAI ĐOẠN 1: LẬP DÀN Ý (OUTLINE GENERATION)
+    // ----------------------------------------------------
+    console.log("[AGENT STAGE 1] Đang lập dàn ý...");
+    
+    const outlinePrompt = `Bạn là một chuyên gia Chiến lược Nội dung SEO & Information Architect. Nhiệm vụ của bạn là lập DÀN Ý (Outline) cực kỳ logic, mạch lạc và chi tiết cho bài website blog.
+    
+THÔNG TIN ĐẦU VÀO:
+- Tiêu đề mong muốn: ${title || 'Tự chọn theo từ khóa'}
+- Từ khóa chính: ${keyword}
+- LSI keywords: ${lsi || 'Không có'}
 
-Cấu trúc bắt buộc (theo thứ tự):
-Meta Title (dưới 60 ký tự, chứa từ khóa)
-Meta Description (2-3 câu, dưới 160 ký tự)
-Giới thiệu (200-300 từ, đặt vấn đề thực tế, có LSI)
-Body content với các heading H2/H3 (mỗi H2 gắn 1 LSI khác nhau, viết đoạn văn, hạn chế danh sách)
-Section bắt buộc: "Cách Thực Hiện Trong Thực Tế (Ví dụ Tham Khảo)" (gồm 4 bước dạng liệt kê, mỗi bước 1 câu, kèm đoạn phân tích)
-Kết luận (tóm tắt 3 điểm chính, CTA mềm)
+YÊU CẦU DÀN Ý:
+1. Phân bổ thẻ H2, H3 rõ ràng, nhắm trúng Intent của người tìm kiếm.
+2. Gắn LSI khéo léo vào các H2/H3 hợp lý.
+3. Mỗi Heading hãy kèm theo 1-2 gạch đầu dòng ghi chú "Ý chính cần triển khai" ngắn gọn làm cơ sở viết bài.
+4. Bắt buộc có phần H2 mang tên y hệt: "Cách Thực Hiện Trong Thực Tế (Ví dụ Tham Khảo)" đằng trước phần Kết luận.
 
-CHÚ Ý QUAN TRỌNG VỀ INTERNAL LINK: Bạn BẮT BUỘC chèn đường link "${internalLinkStr}" vào đúng 1 vị trí siêu tự nhiên trong một đoạn văn (có liên quan ngữ cảnh). Anchor text phải là cụm từ có ý nghĩa (KHÔNG 'xem thêm' hay 'tại đây'). Cú pháp: [anchor text](${internalLinkStr}).
+LƯU Ý: CHỈ TRẢ VỀ DÀN Ý, TUYỆT ĐỐI KHÔNG VIẾT BÀI CHI TIẾT TẠI ĐÂY.
+Định dạng dưới dạng danh mục Markdown (sử dụng '#' cho H2, '##' cho H3... Wait, Markdown standard: '##' cho H2, '###' cho H3).`;
 
-Giọng văn & phong cách:
-Bình tĩnh, rõ ràng, giàu kinh nghiệm thực tế (giọng Hoàng Đạt).
-Không phô trương, không hứa hẹn "an toàn tuyệt đối".
-Không dùng ngôn ngữ bán hàng.
-Viết như đang giải thích cho người nghiêm túc.
+    let generatedOutline = await callAI([{ role: 'user', content: outlinePrompt }], apiKey, 0.7);
 
-Đầu ra:
-Xuất bài viết hoàn chỉnh với đầy đủ các phần trên định dạng Markdown. KHÔNG đánh giá SEO gì cả ở bước này.
-Không được in ra code block bao bọc tòan bộ văn bản.
 
-Bắt đầu viết bài với thông tin:
-Tiêu đề: ${title || 'Tự chọn phù hợp với từ khóa'}
-Từ khóa chính: ${keyword}
-LSI keywords: ${lsi || 'Không có'}
-Internal link: ${internalLinkStr}`;
+    // ----------------------------------------------------
+    // GIAI ĐOẠN 2: VIẾT BÀI CHI TIẾT (FEW-SHOT & CHAIN-OF-THOUGHT)
+    // ----------------------------------------------------
+    console.log("[AGENT STAGE 2] Viết nội dung dựa trên dàn ý...");
 
-    console.log("[AGENT] Bước 1: Khởi viết...");
-    let article = await callAI([{ role: 'user', content: writePrompt }], apiKey, 0.7);
+    const articlePrompt = `Bạn là một chuyên gia SEO Copywriter thực chiến, đang viết cho blog.hacklike16.com. Hãy viết BÀI BLOG HOÀN CHỈNH dựa trên Dàn Ý do kiến trúc sư thông tin vừa lập bên dưới:
 
-    // HÀM HELPER CHẤM ĐIỂM
-    const getRatingPrompt = (articleContent) => `Bạn là Hệ thống Chấm điểm SEO. Hãy chấm điểm bài viết MỚI SAU ĐÂY theo thang 100 dựa trên các tiêu chí cứng sau:
-1. Từ khóa (20đ): từ khóa chính '${keyword}' có trong Meta Title, Meta Description, H2 đầu tiên, đoạn mở đầu.
-2. Readability (20đ): câu dưới 20 từ, đoạn dưới 5 dòng, có H2/H3 hợp lý, hạn chế câu bị động.
-3. E-E-A-T (25đ): có phân tích thực tế, trải nghiệm cá nhân, giải thích rủi ro, không bán hàng.
-4. Độ dài (10đ): >1200 từ (10đ), 800-1200 từ (5đ), <800 từ (0đ).
-5. Internal Link (10đ): có chèn ĐÚNG 1 link "${internalLinkStr}" một cách tự nhiên (10đ), gượng ép (5đ), không có (0đ).
-6. Section hướng dẫn (15đ): có đúng H2 "Cách Thực Hiện Trong Thực Tế...", có 4 bước, có phân tích, không quảng cáo.
+<DÀN_Ý>
+${generatedOutline}
+</DÀN_Ý>
 
-BẮT BUỘC TRẢ VỀ CHỈ MỘT CHUỖI JSON DUY NHẤT (không giải thích thêm), đúng chuẩn sau:
-{
-  "score": 85,
-  "details": {
-    "criteria": {
-      "keyword": { "diem": 20, "toi_da": 20, "nhan_xet": "..." },
-      "readability": { "diem": 20, "toi_da": 20, "nhan_xet": "..." },
-      "eeat": { "diem": 25, "toi_da": 25, "nhan_xet": "..." },
-      "length": { "diem": 10, "toi_da": 10, "nhan_xet": "..." },
-      "internalLink": { "diem": 10, "toi_da": 10, "nhan_xet": "..." },
-      "realLifeGuide": { "diem": 15, "toi_da": 15, "nhan_xet": "..." }
-    }
-  },
-  "suggestions": [
-    "<gợi ý 1>",
-    "<gợi ý 2>"
-  ]
-}
+Ngữ cảnh bài viết cần bao trùm:
+- Tiêu đề: ${title || 'Tự chọn'}
+- Từ khóa chính: ${keyword}
 
-NỘI DUNG BÀI VIẾT:
-"""
-${articleContent}
-"""`;
+[1. QUY CHUẨN ĐỊNH DẠNG BẮT BUỘC]
+- Viết hoàn toàn bằng Markdown (tuyệt đối không bọc nội dung trong block \`\`\`markdown).
+- Phần mở đầu xuất chính xác 2 dòng:
+   **Meta Title:** (dưới 60 ký tự, chứa từ khóa)
+   **Meta Description:** (2-3 câu, chứa từ khóa)
+- Theo đúng thứ tự và dàn ý bên trên để triển khai bài. 
 
-    console.log("[AGENT] Bước 2: Chấm điểm lần 1...");
-    let rating = await callAI([{ role: 'user', content: getRatingPrompt(article) }], apiKey, 0.1, true);
+[2. CHỈ THỊ CẤM NGHIÊM NGẶT (NEGATIVE PROMPTING)]
+- TUYỆT ĐỐI KHÔNG dùng các cụm từ sáo rỗng rập khuôn AI như: "trong thế giới ngày nay", "không thể phủ nhận", "đầu tiên và quan trọng nhất", "chào mừng bạn đến với", "hơn thế nữa", "mặt khác", "khi nói đến".
+- MỖI ĐOẠN VĂN: Cấm dài quá 60 từ. (Ngắt đoạn, xuống dòng liên tục để tạo sự thoáng đãng dễ đọc).
+- MỖI CÂU VĂN: Cấm dài quá 25 từ. Viết câu tường minh, dứt khoát.
+- CÚ PHÁP: Ưu tiên 100% sử dụng CÂU CHỦ ĐỘNG. Rất hạn chế/Cấm dùng cấu trúc bị động ("được cho là", "bị khóa", "bị tuột ảnh hưởng").
 
-    let bestArticle = article;
-    let bestRating = rating;
+[3. E-E-A-T & ĐỘ SÂU]
+- Viết từ góc nhìn của một người ĐÃ CÓ KINH NGHIỆM THỰC CHIẾN làm dịch vụ MXH (Giọng anh Hoàng Đạt).
+- Trọng tâm phải lột tả: Chia sẻ VÍ DỤ THỰC TẾ, CÁC SAI LẦM, KHÓ KHĂN mà khách hay gặp và BÀI HỌC RÚT RA cụ thể.
+- Đừng giảng đạo lý suông. Chỉ ra cách làm, chỉ ra lý do rủi ro tường tận cho khách hàng hiểu.
 
-    // BƯỚC 3: VÒNG LẶP SỬA BÀI (Max 2 lần)
-    let loopCount = 0;
-    while (loopCount < 2 && bestRating.score && bestRating.score < 85) {
-      loopCount++;
-      console.log(`[AGENT] Score: ${bestRating.score}. Chạy vòng lặp sửa lỗi thứ ${loopCount}...`);
-      
-      let rewritePrompt = `Bạn là chuyên gia biên tập SEO. Bài viết sau đây cần được cải thiện vì chỉ đạt ${bestRating.score}/100 điểm.
-Các điểm yếu và gợi ý từ hệ thống cần khắc phục NGAY LẬP TỨC:
-- ${bestRating.suggestions ? bestRating.suggestions.join('\\n- ') : 'Cải thiện E-E-A-T và Readability'}
-- CHÚ Ý: Bắt buộc từ khóa chính '${keyword}' phải chuẩn xác.
-- CHÚ Ý: Bắt buộc chèn internal link: "${internalLinkStr}" một cách TỰ NHIÊN, KHÔNG GƯỢNG ÉP.
+[4. KIỂM SOÁT INTERNAL LINK (RẤT QUAN TRỌNG)]
+- Có 1 liên kết quan trọng: "${internalLinkStr}"
+- CHỈ THỊ: Trong đoạn văn thứ 3 của phần thẻ H2 thứ 2 HOẶC một phần H2 có nội dung nói đến dịch vụ/hệ thống liên quan chặt chẽ nhất, HÃY CHÈN đúng 1 lần liên kết trên.
+- Anchor text chèn link phải là NHỮNG CỤM TỪ CÓ NGHIÃ (ví dụ: giải pháp buff follow, quy trình kéo traffic thật...).
+- CẤM NHẶT: Cấm dùng các cụm "xem thêm", "nhấn vào đây", "tại đây" để chèn link.
 
-HÃY CẢI THIỆN VÀ VIẾT LẠI TOÀN BỘ BÀI VIẾT NÀY. CHỈ cần trả về nội dung bài viết mới. Giữ nguyên cấu trúc Markdown tổng thể. Không trả về JSON.
-Nội dung bài viết cũ:
-"""
-${bestArticle}
-"""`;
+[5. FEW-SHOT PROMPTING - BẮT CHƯỚC VĂN PHONG]
+Dưới đây là HAI VÍ DỤ MẪU về cách triển khai một khối Heading hoàn hảo. Cần sao chép tinh thần, cách độ dài đoạn, câu và cách truyền tải kinh nghiệm của ví dụ này:
 
-      // Rewrite
-      let rewrittenArticle = await callAI([{ role: 'user', content: rewritePrompt }], apiKey, 0.5);
-      
-      // Rerate
-      console.log(`[AGENT] Chấm điểm lại vòng ${loopCount}...`);
-      let newRating = await callAI([{ role: 'user', content: getRatingPrompt(rewrittenArticle) }], apiKey, 0.1, true);
-      
-      if (newRating.score && newRating.score > bestRating.score) {
-        bestRating = newRating;
-        bestArticle = rewrittenArticle;
-      }
-    }
+--- BẮT ĐẦU VÍ DỤ MẪU 1 (E-E-A-T) ---
+## Tại Sao Đa Số Tài Khoản Vẫn Mất Tương Tác Khi Mua Follow?
+Rất nhiều bạn chủ shop tin rằng cứ bơm follow lên 10k thì auto có khách. Thực tế luôn ngược lại. Instagram sở hữu thuật toán dọn rác cực nhạy. Nó phân tích luồng traffic của bạn theo thời gian thực.
+Nếu một ngày bạn chỉ có lác đác 10 người xem mà húc thẳng vào 5000 follow ảo, thuật toán sẽ gắn thẻ đỏ ngay tài khoản đó. Đây là sai lầm phổ thông nhất mà tôi gặp.
+Kinh nghiệm của tôi sau 5 năm xử lý case này: Hãy xây phễu từ từ. Dàn trải lượng follow rải rác trong vòng 1 tuần. Kèm theo đó bắt buộc phải có action thật (như người thật cày like, save bài viết) bổ sung vào. Đừng vì nôn nóng vài đồng mà giết chết cái nick xây bao công.
+--- KẾT THÚC VÍ DỤ MẪU 1 ---
 
-    console.log(`[AGENT] Hoàn tất! Best Score: ${bestRating.score || 'Unknown'}`);
+--- BẮT ĐẦU VÍ DỤ MẪU 2 (HƯỚNG DẪN THỰC TẾ) ---
+## Cách Thực Hiện Trong Thực Tế (Ví dụ Tham Khảo)
+Đây là chuỗi thao tác thực tế chúng tôi setup cho khách hàng để đảm bảo an toàn tuyệt đối, bạn hãy đọc kỹ:
+- Chạy hâm nóng nick: Đăng bài đều đặn trong 5 ngày đầu trước khi buff.
+- Vào hệ thống chọn gói: Ưu tiên Server follow người dùng thật hoặc tài khoản đã nuôi lâu năm.
+- Giãn cách số lượng: Gói 5k follow phải chọn chế độ nhảy nhỏ giọt (Drip-feed) rải trong 5 ngày.
+- Quản trị độ trust: Cứ mỗi 1000 follow mới, tạo ra 20 bình luận gốc và 100 lượt thả tim trên Reels mới nhất.
 
-    // BƯỚC 4: TẠO BẢNG ĐIỂM
-    let scoreTableMarkdown = `\n\n---\n\n## 📊 ĐÁNH GIÁ SEO\n\n`;
-    if (bestRating.details && bestRating.details.criteria) {
-      scoreTableMarkdown += `**Tổng Điểm:** ${bestRating.score} / 100\n\n`;
-      const c = bestRating.details.criteria;
-      for (const key in c) {
-         if (c[key]) {
-            scoreTableMarkdown += `- **${key.toUpperCase()}**: ${c[key].diem}/${c[key].toi_da}đ - *${c[key].nhan_xet}*\n`;
-         }
-      }
-      if (bestRating.suggestions && bestRating.suggestions.length > 0) {
-        scoreTableMarkdown += `\n**Gợi Ý Cải Thiện Đã Áp Dụng (Hoặc còn tồn đọng):**\n`;
-        bestRating.suggestions.forEach((s, idx) => {
-            scoreTableMarkdown += `${idx + 1}. ${s}\n`;
-        });
-      }
-    } else {
-       scoreTableMarkdown += `*Hệ thống ghi nhận điểm số nội bộ hoàn thành phân tích thuật toán.*\n`;
-    }
+Quá trình trên không chỉ là thao tác bấm nút. Vấn đề lõi trung tâm nằm ở tốc độ, độ tĩnh bối cảnh và sự liền mạch của tài khoản. Chỉ việc nhồi follow mà quên dồn tương tác nền tảng là nguyên nhân số một gây mất nick.
+--- KẾT THÚC VÍ DỤ MẪU 2 ---
 
-    const finalResult = bestArticle + scoreTableMarkdown;
+HÃY ÁP DỤNG TRỌN VẸN CHIẾN LƯỢC VÀ KIẾN TRÚC TRÊN CHO BÀI VIẾT NÀY!`;
+
+    let finalArticle = await callAI([{ role: 'user', content: articlePrompt }], apiKey, 0.7);
+
+    // KẾT QUẢ ĐẦU RA (Không cần dùng Loop nữa vì Chain-of-Thought + FewShot đã ra kim cương)
+    console.log("[AGENT STAGE 2] Hoàn thành sinh nội dung.");
+
+    let architectureMarkdown = `\n\n---\n*💡 Đánh giá Hệ thống: Llama-4-Maverick | Chain-of-Thought & Few-shot Framework*`;
+    const finalResult = finalArticle + architectureMarkdown;
 
     return NextResponse.json({ content: finalResult });
   } catch (error) {
